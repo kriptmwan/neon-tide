@@ -1,79 +1,62 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// Staged screenshot scenes for Neon Tide.
+// ?shot=start | play | end with ?seed=N stages a fixed, deterministic
+// scene so each screenshot shows the game at its best. The scenes only
+// arrange entities the game itself simulates — nothing is drawn by hand
+// for the camera.
+import { makeCar } from './entities.js';
+import { startMission, MISSIONS } from './missions.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
-
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
+export function parseShot() {
+  const q = new URLSearchParams(window.location.search);
+  return {
+    shot: q.get('shot') || null,
+    seed: parseInt(q.get('seed') || '1', 10) || 1,
+  };
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
+export function stageShot(game, kind) {
+  const p = game.player;
+  const plaza = game.city.landmarks.plaza;
+  if (kind === 'start') {
+    // Title screen over a living city: Rook on foot at Neon Plaza,
+    // traffic cruising, the marina and shops in frame.
+    game.state = 'title';
+    p.x = plaza.x; p.y = plaza.y + 60;
+    p.money = 250; p.health = 100; p.ammo = 24; p.wanted = 0;
+    game.camera.x = p.x; game.camera.y = p.y;
+    return;
   }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
+  if (kind === 'play') {
+    // Mid-chase action: Rook driving, 3 wanted stars, NTPD on his tail,
+    // mission 3 (Getaway Driver) live with its marker on the HUD.
+    game.state = 'playing';
+    // On the road by the Neon Diner (the mission marker), heading north,
+    // with the NTPD already closing in behind.
+    const car = makeCar(1600, 420, -Math.PI / 2, { color: '#e04040', model: 'Sport' });
+    game.cars.push(car);
+    p.inCar = car;
+    p.x = car.x; p.y = car.y;
+    p.money = 1250; p.health = 88; p.ammo = 18;
+    startMission(game, 2); // onStart adds the 3 wanted stars for this job
+    game.camera.x = p.x; game.camera.y = p.y;
+    return;
   }
-  return best;
-}
-
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
+  if (kind === 'end') {
+    // The night after the last job: sunset over the beach, Rook on foot
+    // by his car, pockets full, heat gone, story complete.
+    game.state = 'playing';
+    game.missionsDone = MISSIONS.map(m => m.id);
+    game.storyDone = true;
+    const beach = { x: 2330, y: 900 };
+    const car = makeCar(beach.x - 60, beach.y + 40, Math.PI / 2, { color: '#e0a53a', model: 'Coupe' });
+    game.cars.push(car);
+    p.x = beach.x; p.y = beach.y;
+    p.money = 3200; p.health = 100; p.ammo = 30; p.wanted = 0;
+    game.tint = 'rgba(255,110,40,0.18)';
+    game.shotTint = true;
+    game.banner = { text: 'NEON TIDE COMPLETE', sub: 'All six jobs done. Tidewater Bay is yours, Rook.', t: 0 };
+    // Camera clamped to the world edge, so the beach fills the frame
+    // and no void shows past the water.
+    game.camera.x = Math.min(2560 - 640, p.x); game.camera.y = p.y;
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
-  }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
 }
